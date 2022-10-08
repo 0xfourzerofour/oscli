@@ -1,4 +1,4 @@
-use std::iter;
+use std::{fs::File, iter};
 
 use winit::{
     event::*,
@@ -6,6 +6,7 @@ use winit::{
     window::Window,
 };
 
+use crate::channel::Channel;
 use crate::oscilloscope::Oscilloscope;
 
 struct State {
@@ -14,11 +15,11 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    oscilloscope: Oscilloscope,
+    channel: Channel,
 }
 
 impl State {
-    async fn new(window: &Window, file_name: &String) -> Self {
+    async fn new(window: &Window) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::Backends::all());
@@ -61,13 +62,15 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        let channel = Channel::try_new().unwrap();
+
         Self {
             surface,
             device,
             queue,
             config,
             size,
-            oscilloscope: Oscilloscope::new(file_name),
+            channel,
         }
     }
 
@@ -88,8 +91,6 @@ impl State {
     fn update(&mut self) {}
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let _osc_handle = &self.oscilloscope.handler;
-
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -128,14 +129,13 @@ impl State {
     }
 }
 
-pub async fn run(file_name: &String) {
+pub async fn run() {
     env_logger::init();
 
     let event_loop = EventLoop::new();
     let window = Window::new(&event_loop).unwrap();
 
-    // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(&window, file_name).await;
+    let mut state = State::new(&window).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -144,7 +144,6 @@ pub async fn run(file_name: &String) {
                 window_id,
             } if window_id == window.id() => {
                 if !state.input(event) {
-                    // UPDATED!
                     match event {
                         WindowEvent::CloseRequested
                         | WindowEvent::KeyboardInput {
@@ -163,6 +162,24 @@ pub async fn run(file_name: &String) {
                             // new_inner_size is &&mut so w have to dereference it twice
                             state.resize(**new_inner_size);
                         }
+                        WindowEvent::DroppedFile(path_buf) => {
+                            // new_inner_size is &&mut so w have to dereference it twice
+                            let file = File::open(path_buf.as_os_str()).unwrap();
+
+                            state.channel.try_play(file).unwrap();
+                        }
+                        WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    virtual_keycode: Some(keycode),
+                                    ..
+                                },
+                            ..
+                        } => match keycode {
+                            VirtualKeyCode::Space => state.channel.resume(),
+                            VirtualKeyCode::P => state.channel.pause(),
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }

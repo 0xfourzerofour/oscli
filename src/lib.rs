@@ -2,6 +2,6 @@ pub mod oscilloscope;
 
 pub mod renderer;
 
-pub mod player;
+pub mod channel;
 
-pub mod track;
+pub mod audio_source;
