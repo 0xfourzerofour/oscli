@@ -1,4 +1,8 @@
 use anyhow::Result;
+use cpal::{
+    traits::{DeviceTrait, HostTrait},
+    Device,
+};
 use std::fs::File;
 
 use rodio::{dynamic_mixer::DynamicMixer, OutputStream, OutputStreamHandle};
@@ -13,7 +17,14 @@ pub struct Channel {
 
 impl Channel {
     pub fn try_new() -> Result<Channel> {
-        let (stream, stream_handle) = OutputStream::try_default()?;
+        let host = cpal::default_host();
+
+        let device = host
+            .default_output_device()
+            .expect("no output device available");
+
+        let (stream, stream_handle) = OutputStream::try_from_device(&device)?;
+
         Ok(Channel {
             stream,
             stream_handle,
@@ -40,12 +51,6 @@ impl Channel {
     }
 
     pub fn stop(&self) {
-        if let Some(ref source) = self.source {
-            source.stop();
-        }
-    }
-
-    pub fn stop_2(&self) {
         if let Some(ref source) = self.source {
             source.stop();
         }

@@ -20,3 +20,7 @@ log = "0.4"
 pollster = "0.2"
 rodio = "0.16.0"
 cpal = "0.14.0"
+symphonia = { version = "0.5.1", features = ["mp3"] }
+minimp3 = "0.5.1"
+lazy_static = "1.4.0"
+rb = "0.3.2"
