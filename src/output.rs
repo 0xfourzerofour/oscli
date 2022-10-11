@@ -1,172 +1,139 @@
-use std::result;
+use core::mem::MaybeUninit;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::Stream;
+use minimp3::{Decoder, Error, Frame};
+use ringbuf::{Consumer, Producer, SharedRb};
+use std::fs::File;
+use std::sync::{Arc, Mutex};
 
-use symphonia::core::audio::AudioBufferRef;
-
-use symphonia::core::audio::SignalSpec;
-use symphonia::core::units::Duration;
-
-pub trait AudioOutput {
-    fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<()>;
-    fn flush(&mut self);
+pub struct Output {
+    pub buffer: Arc<Vec<i16>>,
+    sample_rate: cpal::SampleRate,
+    channels: cpal::ChannelCount,
+    stream: Option<Stream>,
+    pub position: Arc<Mutex<usize>>,
+    prod: Producer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
+    pub cons: Consumer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
 }
 
-#[allow(dead_code)]
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug)]
-pub enum AudioOutputError {
-    OpenStreamError,
-    PlayStreamError,
-    StreamClosedError,
-}
+// unsafe impl Send for Output {}
 
-pub type Result<T> = result::Result<T, AudioOutputError>;
+impl Output {
+    pub fn new() -> Self {
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
-mod cpal {
-    use super::{AudioOutput, AudioOutputError, Result};
-
-    use symphonia::core::audio::{AudioBufferRef, RawSample, SampleBuffer, SignalSpec};
-    use symphonia::core::conv::ConvertibleSample;
-    use symphonia::core::units::Duration;
-
-    use cpal;
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use rb::*;
-
-    use log::error;
-
-    pub struct CpalAudioOutput;
-
-    trait AudioOutputSample:
-        cpal::Sample + ConvertibleSample + RawSample + std::marker::Send + 'static
-    {
-    }
-
-    impl AudioOutputSample for f32 {}
-    impl AudioOutputSample for i16 {}
-    impl AudioOutputSample for u16 {}
-
-    impl CpalAudioOutput {
-        pub fn try_open(spec: SignalSpec, duration: Duration) -> Result<Box<dyn AudioOutput>> {
-            // Get default host.
-            let host = cpal::default_host();
-
-            // Get the default audio output device.
-            let device = match host.default_output_device() {
-                Some(device) => device,
-                _ => {
-                    error!("failed to get default audio output device");
-                    return Err(AudioOutputError::OpenStreamError);
-                }
-            };
-
-            let config = match device.default_output_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    error!("failed to get default audio output device config: {}", err);
-                    return Err(AudioOutputError::OpenStreamError);
-                }
-            };
-
-            // Select proper playback routine based on sample format.
-            match config.sample_format() {
-                cpal::SampleFormat::F32 => {
-                    CpalAudioOutputImpl::<f32>::try_open(spec, duration, &device)
-                }
-                cpal::SampleFormat::I16 => {
-                    CpalAudioOutputImpl::<i16>::try_open(spec, duration, &device)
-                }
-                cpal::SampleFormat::U16 => {
-                    CpalAudioOutputImpl::<u16>::try_open(spec, duration, &device)
-                }
-            }
+        Self {
+            buffer: Arc::new(Vec::new()),
+            sample_rate: cpal::SampleRate(44100),
+            channels: 2,
+            stream: None,
+            position: Arc::new(Mutex::new(0)),
+            prod,
+            cons,
         }
     }
 
-    struct CpalAudioOutputImpl<T: AudioOutputSample>
-    where
-        T: AudioOutputSample,
-    {
-        ring_buf_producer: rb::Producer<T>,
-        sample_buf: SampleBuffer<T>,
-        stream: cpal::Stream,
-    }
+    pub fn from_bytes(file: File) -> Self {
+        let mut decoder = Decoder::new(file);
+        let mut buffer = Vec::new();
+        let mut sample_rate = cpal::SampleRate(0);
+        let mut channels: cpal::ChannelCount = 1;
 
-    impl<T: AudioOutputSample> CpalAudioOutputImpl<T> {
-        pub fn try_open(
-            spec: SignalSpec,
-            duration: Duration,
-            device: &cpal::Device,
-        ) -> Result<Box<dyn AudioOutput>> {
-            let num_channels = spec.channels.count();
-
-            let config = cpal::StreamConfig {
-                channels: num_channels as cpal::ChannelCount,
-                sample_rate: cpal::SampleRate(spec.rate),
-                buffer_size: cpal::BufferSize::Default,
-            };
-
-            let ring_len = ((2000 * spec.rate as usize) / 1000) * num_channels;
-
-            let ring_buf = SpscRb::new(ring_len);
-            let (ring_buf_producer, ring_buf_consumer) = (ring_buf.producer(), ring_buf.consumer());
-
-            let stream_result = device.build_output_stream(
-                &config,
-                move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                    let written = ring_buf_consumer.read(data).unwrap_or(0);
-                    data[written..].iter_mut().for_each(|s| *s = T::MID);
-                },
-                move |err| error!("audio output error: {}", err),
-            );
-
-            if let Err(err) = stream_result {
-                error!("audio output stream open error: {}", err);
-
-                return Err(AudioOutputError::OpenStreamError);
+        loop {
+            match decoder.next_frame() {
+                Ok(Frame {
+                    mut data,
+                    sample_rate: rate,
+                    channels: ch,
+                    ..
+                }) => {
+                    sample_rate = cpal::SampleRate(rate as u32);
+                    channels = ch as cpal::ChannelCount;
+                    buffer.append(&mut data);
+                }
+                Err(Error::Eof) => break,
+                Err(e) => panic!("{:?}", e),
             }
+        }
 
-            let stream = stream_result.unwrap();
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
-            if let Err(err) = stream.play() {
-                error!("audio output stream play error: {}", err);
-
-                return Err(AudioOutputError::PlayStreamError);
-            }
-
-            let sample_buf = SampleBuffer::<T>::new(duration, spec);
-
-            Ok(Box::new(CpalAudioOutputImpl {
-                ring_buf_producer,
-                sample_buf,
-                stream,
-            }))
+        Self {
+            buffer: Arc::new(buffer),
+            sample_rate,
+            channels,
+            stream: None,
+            position: Arc::new(Mutex::new(0)),
+            prod,
+            cons,
         }
     }
 
-    impl<T: AudioOutputSample> AudioOutput for CpalAudioOutputImpl<T> {
-        fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<()> {
-            if decoded.frames() == 0 {
-                return Ok(());
-            }
+    pub fn play(&mut self) {
+        let host = cpal::default_host();
 
-            self.sample_buf.copy_interleaved_ref(decoded);
+        let device = host
+            .default_output_device()
+            .expect("no output device available");
 
-            let mut samples = self.sample_buf.samples();
+        let mut supported_configs_range = device
+            .supported_output_configs()
+            .expect("error while querying configs");
 
-            while let Some(written) = self.ring_buf_producer.write_blocking(samples) {
-                samples = &samples[written..];
-            }
+        let supported_config = supported_configs_range
+            .find(|range| {
+                range.sample_format() == cpal::SampleFormat::F32
+                    && range.max_sample_rate() >= self.sample_rate
+                    && range.min_sample_rate() <= self.sample_rate
+                    && range.channels() == self.channels
+            })
+            .expect("Could not find supported audio config")
+            .with_sample_rate(self.sample_rate);
 
-            Ok(())
-        }
+        let buffer = self.buffer.clone();
+        let position = self.position.clone();
 
-        fn flush(&mut self) {
-            let _ = self.stream.pause();
+        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+
+        self.cons = cons;
+
+        self.stream = Some(
+            device
+                .build_output_stream(
+                    &supported_config.into(),
+                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        let mut pos = position.lock().unwrap();
+                        for sample in data.iter_mut() {
+                            let value = if *pos < buffer.len() { buffer[*pos] } else { 0 };
+                            *sample = cpal::Sample::from(&value);
+                            prod.push(value as i32);
+                            *pos += 1;
+                        }
+                    },
+                    move |_err| panic!("ERROR"),
+                )
+                .expect("Building output stream failed"),
+        );
+    }
+
+    pub fn set_position(&mut self, seconds: f64) {
+        let mut position = self.position.lock().unwrap();
+        *position = self.seconds_to_samples(seconds).max(0) as usize;
+    }
+
+    pub fn pause(&mut self) {
+        if let Some(ref stream) = self.stream {
+            stream.pause().unwrap()
         }
     }
-}
 
-#[cfg(not(target_os = "linux"))]
-pub fn try_open(spec: SignalSpec, duration: Duration) -> Result<Box<dyn AudioOutput>> {
-    cpal::CpalAudioOutput::try_open(spec, duration)
+    pub fn forward(&mut self, seconds: f64) {
+        let number_of_samples = self.seconds_to_samples(seconds);
+        let mut position = self.position.lock().unwrap();
+        *position = (*position as i32 + number_of_samples).max(0) as usize;
+    }
+
+    fn seconds_to_samples(&self, seconds: f64) -> i32 {
+        (self.sample_rate.0 as f64 * seconds) as i32 * self.channels as i32
+    }
 }

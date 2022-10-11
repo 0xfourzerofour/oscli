@@ -1,13 +1,14 @@
-use std::{fs::File, iter};
+use core::mem::MaybeUninit;
+use std::{fs::File, iter, sync::Arc};
 
+use ringbuf::{Consumer, SharedRb};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
 
-use crate::channel::Channel;
-use crate::oscilloscope::Oscilloscope;
+use crate::output::Output;
 
 struct State {
     surface: wgpu::Surface,
@@ -15,7 +16,7 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    channel: Channel,
+    output: Output,
 }
 
 impl State {
@@ -55,15 +56,13 @@ impl State {
         };
         surface.configure(&device, &config);
 
-        let channel = Channel::try_new().unwrap();
-
         Self {
             surface,
             device,
             queue,
             config,
             size,
-            channel,
+            output: Output::new(),
         }
     }
 
@@ -84,6 +83,7 @@ impl State {
     fn update(&mut self) {}
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        println!("{:?}", Some(self.output.cons.pop()));
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -159,7 +159,11 @@ pub async fn run() {
                             // new_inner_size is &&mut so w have to dereference it twice
                             let file = File::open(path_buf.as_os_str()).unwrap();
 
-                            state.channel.try_play(file).unwrap();
+                            let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+
+                            let output = Output::from_bytes(file);
+
+                            state.output = output;
                         }
                         WindowEvent::KeyboardInput {
                             input:
@@ -169,8 +173,9 @@ pub async fn run() {
                                 },
                             ..
                         } => match keycode {
-                            VirtualKeyCode::Space => state.channel.resume(),
-                            VirtualKeyCode::P => state.channel.pause(),
+                            VirtualKeyCode::Space => state.output.play(),
+                            VirtualKeyCode::Up => state.output.forward(1 as f64),
+                            VirtualKeyCode::P => state.output.pause(),
                             _ => {}
                         },
                         _ => {}

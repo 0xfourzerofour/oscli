@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cpal::{
     traits::{DeviceTrait, HostTrait},
-    Device,
+    Device, Stream,
 };
 use std::fs::File;
 
