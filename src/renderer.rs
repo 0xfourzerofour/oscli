@@ -83,7 +83,10 @@ impl State {
     fn update(&mut self) {}
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        println!("{:?}", Some(self.output.cons.pop()));
+        let test_arr = vec![10022, 423, 3322, 34324, 320, 5];
+
+        println!("{:?}", generate_vertexes(test_arr));
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -103,9 +106,9 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
                             a: 1.0,
                         }),
                         store: true,
@@ -200,4 +203,39 @@ pub async fn run() {
             _ => {}
         }
     });
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+fn generate_vertexes(ring_buffer: Vec<i32>) -> Vec<Vertex> {
+    let mut vertex_arr = Vec::new();
+    let mut left = true;
+
+    for (i, el) in ring_buffer.iter().enumerate() {
+        let frac: f32 = ring_buffer.len() as f32 / (i as f32 + 1.0);
+
+        let x: f32 = (2.0 / frac) - 1.0;
+        let y = 0.5 / *el as f32;
+
+        if left {
+            vertex_arr.push(Vertex {
+                color: [1.0, 1.0, 1.0],
+                position: [x, -y, 0.0],
+            });
+            left = false;
+        } else {
+            vertex_arr.push(Vertex {
+                color: [1.0, 1.0, 1.0],
+                position: [x, y, 0.0],
+            });
+            left = true;
+        }
+    }
+
+    return vertex_arr;
 }

@@ -12,7 +12,7 @@ pub struct Output {
     channels: cpal::ChannelCount,
     stream: Option<Stream>,
     pub position: Arc<Mutex<usize>>,
-    prod: Producer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
+    pub prod: Producer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
     pub cons: Consumer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
 }
 
@@ -20,7 +20,7 @@ pub struct Output {
 
 impl Output {
     pub fn new() -> Self {
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
 
         Self {
             buffer: Arc::new(Vec::new()),
@@ -56,7 +56,7 @@ impl Output {
             }
         }
 
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
 
         Self {
             buffer: Arc::new(buffer),
@@ -70,6 +70,11 @@ impl Output {
     }
 
     pub fn play(&mut self) {
+        if let Some(ref stream) = self.stream {
+            stream.play().unwrap();
+            return;
+        }
+
         let host = cpal::default_host();
 
         let device = host
@@ -93,7 +98,7 @@ impl Output {
         let buffer = self.buffer.clone();
         let position = self.position.clone();
 
-        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
 
         self.cons = cons;
 
