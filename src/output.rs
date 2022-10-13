@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 
 pub struct Output {
     pub buffer: Arc<Vec<i16>>,
-    sample_rate: cpal::SampleRate,
-    channels: cpal::ChannelCount,
-    stream: Option<Stream>,
+    pub sample_rate: cpal::SampleRate,
+    pub channels: cpal::ChannelCount,
+    pub stream: Option<Stream>,
     pub position: Arc<Mutex<usize>>,
     pub prod: Producer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
     pub cons: Consumer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
@@ -20,7 +20,7 @@ pub struct Output {
 
 impl Output {
     pub fn new() -> Self {
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
         Self {
             buffer: Arc::new(Vec::new()),
@@ -56,7 +56,7 @@ impl Output {
             }
         }
 
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
+        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
         Self {
             buffer: Arc::new(buffer),
@@ -98,7 +98,7 @@ impl Output {
         let buffer = self.buffer.clone();
         let position = self.position.clone();
 
-        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(256).split();
+        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
         self.cons = cons;
 

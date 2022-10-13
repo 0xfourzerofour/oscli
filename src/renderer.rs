@@ -1,7 +1,6 @@
-use core::mem::MaybeUninit;
-use std::{fs::File, iter, sync::Arc};
+use std::{fs::File, iter};
 
-use ringbuf::{Consumer, SharedRb};
+use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -9,6 +8,7 @@ use winit::{
 };
 
 use crate::output::Output;
+use crate::vertex::{generate_vertexes, Vertex};
 
 struct State {
     surface: wgpu::Surface,
@@ -17,6 +17,12 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     output: Output,
+    vertex_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
+    sound_bind_group: wgpu::BindGroup,
+    ring_buf_copy: dasp::ring_buffer::Fixed<[i32; 1024]>,
+    render_pipeline: wgpu::RenderPipeline,
+    num_vertices: u32,
 }
 
 impl State {
@@ -46,6 +52,52 @@ impl State {
             .await
             .unwrap();
 
+        let rb_copy = dasp::ring_buffer::Fixed::from([0 as i32; 1024]);
+
+        let (data, _) = rb_copy.slices();
+
+        let vertecies = generate_vertexes(data);
+
+        let num_verticies = vertecies.len();
+
+        println!("{}", num_verticies);
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertecies[0..num_verticies]),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let sound_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("sound_bind_group_layout"),
+            });
+
+        let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &sound_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+            label: Some("sound_bind_group"),
+        });
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
@@ -54,7 +106,55 @@ impl State {
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
         };
+
         surface.configure(&device, &config);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vertex_shader.wgsl").into()),
+        });
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&sound_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[Vertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1,                         // 2.
+                mask: !0,                         // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+        });
 
         Self {
             surface,
@@ -63,6 +163,12 @@ impl State {
             config,
             size,
             output: Output::new(),
+            ring_buf_copy: rb_copy,
+            vertex_buffer,
+            uniform_buffer,
+            sound_bind_group,
+            render_pipeline,
+            num_vertices: num_verticies as u32,
         }
     }
 
@@ -80,13 +186,25 @@ impl State {
         false
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self, _dt: std::time::Duration) {
+        let d = self.output.cons.pop();
+
+        if let Some(data) = d {
+            self.ring_buf_copy.push(data);
+        }
+
+        let (data, _) = self.ring_buf_copy.slices();
+
+        let vertecies = generate_vertexes(data);
+
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+        );
+    }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let test_arr = vec![10022, 423, 3322, 34324, 320, 5];
-
-        println!("{:?}", generate_vertexes(test_arr));
-
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -99,7 +217,7 @@ impl State {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -116,6 +234,11 @@ impl State {
                 })],
                 depth_stencil_attachment: None,
             });
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..self.num_vertices, 0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -132,6 +255,8 @@ pub async fn run() {
     let window = Window::new(&event_loop).unwrap();
 
     let mut state = State::new(&window).await;
+
+    let render_start_time = std::time::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -159,10 +284,7 @@ pub async fn run() {
                             state.resize(**new_inner_size);
                         }
                         WindowEvent::DroppedFile(path_buf) => {
-                            // new_inner_size is &&mut so w have to dereference it twice
                             let file = File::open(path_buf.as_os_str()).unwrap();
-
-                            let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
 
                             let output = Output::from_bytes(file);
 
@@ -186,7 +308,9 @@ pub async fn run() {
                 }
             }
             Event::RedrawRequested(window_id) if window_id == window.id() => {
-                state.update();
+                let now = std::time::Instant::now();
+                let dt = now - render_start_time;
+                state.update(dt);
                 match state.render() {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -203,39 +327,4 @@ pub async fn run() {
             _ => {}
         }
     });
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-fn generate_vertexes(ring_buffer: Vec<i32>) -> Vec<Vertex> {
-    let mut vertex_arr = Vec::new();
-    let mut left = true;
-
-    for (i, el) in ring_buffer.iter().enumerate() {
-        let frac: f32 = ring_buffer.len() as f32 / (i as f32 + 1.0);
-
-        let x: f32 = (2.0 / frac) - 1.0;
-        let y = 0.5 / *el as f32;
-
-        if left {
-            vertex_arr.push(Vertex {
-                color: [1.0, 1.0, 1.0],
-                position: [x, -y, 0.0],
-            });
-            left = false;
-        } else {
-            vertex_arr.push(Vertex {
-                color: [1.0, 1.0, 1.0],
-                position: [x, y, 0.0],
-            });
-            left = true;
-        }
-    }
-
-    return vertex_arr;
 }
