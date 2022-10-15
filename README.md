@@ -28,7 +28,7 @@ up arrow - skip 1 second
 - zoom functionality
 
 
-#Demo
+# Demo
 
 
 https://user-images.githubusercontent.com/36560907/195976444-5775e6ee-2acd-49da-ad6f-1010f9fe631b.mov
