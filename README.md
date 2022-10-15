@@ -21,9 +21,11 @@ up arrow - skip 1 second
 
 # future work
 
+- Allow WAV files using hound
 - Make the vertex buffer much leaner by interpolating the ring-buffer instead of just passing raw PCM data.
 - use FFT to derive the freqency domain
 - once FFT is implemented, render the audio in 3D space
+- zoom functionality
 
 
 #Demo
