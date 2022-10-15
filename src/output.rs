@@ -1,7 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
 use dasp::ring_buffer::Fixed;
-use flume::Receiver;
 use minimp3::{Decoder, Error, Frame};
 use std::fs::File;
 use std::sync::{Arc, Mutex};
