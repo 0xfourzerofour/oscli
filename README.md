@@ -2,7 +2,7 @@
 
 The implementation is quite simple right now, however I will be planning on continuing the project to visualise the frequency spectrum as well. 
 
-The current implementation only works with mp3 files using [I'm an inline-style link](https://github.com/germangb/minimp3-rs)
+The current implementation only works with mp3 files using [minimp3-rs](https://github.com/germangb/minimp3-rs)
 
 # Instructions
 
