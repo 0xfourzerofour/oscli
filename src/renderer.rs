@@ -7,8 +7,8 @@ use winit::{
     window::Window,
 };
 
-use crate::output::Output;
 use crate::vertex::{generate_vertexes, Vertex};
+use crate::{output::Output, vertex};
 
 struct State {
     surface: wgpu::Surface,
@@ -54,9 +54,11 @@ impl State {
 
         let output = Output::new();
 
-        let data = output.buffer_data_dasp();
+        // let data = output.buffer_data_dasp();
 
-        let vertecies = generate_vertexes(&data[0..data.len()]);
+        // let vertecies = generate_vertexes(&data[0..data.len()]);
+
+        let vertecies = vertex::DEMO_VERTS;
 
         let num_verticies = vertecies.len();
 
@@ -139,19 +141,19 @@ impl State {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None, // 1.
+            depth_stencil: None,
             multisample: wgpu::MultisampleState {
-                count: 1,                         // 2.
-                mask: !0,                         // 3.
-                alpha_to_coverage_enabled: false, // 4.
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
             },
-            multiview: None, // 5.
+            multiview: None,
         });
 
         Self {

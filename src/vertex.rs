@@ -43,7 +43,7 @@ pub fn generate_vertexes(ring_buffer: &[i32]) -> Vec<Vertex> {
     let mut ret: Vec<Vertex> = vec![];
 
     for (i, s) in signal.iter().enumerate() {
-        let frac: f32 = ring_buffer.len() as f32 / (i as f32 + 1.0);
+        let frac: f32 = signal.len() as f32 / (i as f32 + 1.0);
 
         let x: f32 = (2.0 / frac) - 1.0;
 
@@ -68,3 +68,26 @@ pub fn generate_vertexes(ring_buffer: &[i32]) -> Vec<Vertex> {
 
     ret
 }
+
+pub const DEMO_VERTS: &[Vertex] = &[
+    Vertex {
+        position: [-1.0, 0.0, 0.0],
+        color: [0.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, 0.0, 0.0],
+        color: [0.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [0.0, 0.0, 0.0],
+        color: [0.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, 0.0, 0.0],
+        color: [0.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [1.0, 0.0, 0.0],
+        color: [0.0, 0.0, 0.0],
+    },
+];
