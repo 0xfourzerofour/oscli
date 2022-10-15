@@ -15,9 +15,9 @@ drag your mp3 file into the window.
 
 # controls
 
-spacebar - play
-p - pause
-up arrow - skip 1 second
+- spacebar - play
+- p - pause
+- up arrow - skip 1 second
 
 # future work
 
