@@ -7,8 +7,8 @@ use winit::{
     window::Window,
 };
 
+use crate::output::Output;
 use crate::vertex::{generate_vertexes, Vertex};
-use crate::{output::Output, vertex};
 
 struct State {
     surface: wgpu::Surface,
@@ -139,7 +139,7 @@ impl State {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
+                topology: wgpu::PrimitiveTopology::LineList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw, // 2.
                 cull_mode: Some(wgpu::Face::Back),
