@@ -18,8 +18,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     output: Output,
     vertex_buffer: wgpu::Buffer,
-    // uniform_buffer: wgpu::Buffer,
-    // sound_bind_group: wgpu::BindGroup,
+    uniform_buffer: wgpu::Buffer,
+    sound_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     num_vertices: u32,
     playing: bool,
@@ -54,49 +54,49 @@ impl State {
 
         let output = Output::new();
 
-        // let data = output.buffer_data_dasp();
+        let data = output.buffer_data_dasp();
 
-        // let vertecies = generate_vertexes(&data[0..data.len()]);
-
-        let vertecies = vertex::DEMO_VERTS;
+        let vertecies = generate_vertexes(&data[0..data.len()]);
 
         let num_verticies = vertecies.len();
+
+        println!("{}", num_verticies);
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertecies[0..num_verticies]),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        // let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //     label: Some("Vertex Buffer"),
-        //     contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
-        //     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        // });
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
-        // let sound_bind_group_layout =
-        //     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        //         entries: &[wgpu::BindGroupLayoutEntry {
-        //             binding: 0,
-        //             visibility: wgpu::ShaderStages::VERTEX,
-        //             ty: wgpu::BindingType::Buffer {
-        //                 ty: wgpu::BufferBindingType::Uniform,
-        //                 has_dynamic_offset: false,
-        //                 min_binding_size: None,
-        //             },
-        //             count: None,
-        //         }],
-        //         label: Some("sound_bind_group_layout"),
-        //     });
+        let sound_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("sound_bind_group_layout"),
+            });
 
-        // let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        //     layout: &sound_bind_group_layout,
-        //     entries: &[wgpu::BindGroupEntry {
-        //         binding: 0,
-        //         resource: uniform_buffer.as_entire_binding(),
-        //     }],
-        //     label: Some("sound_bind_group"),
-        // });
+        let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &sound_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+            label: Some("sound_bind_group"),
+        });
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -117,7 +117,7 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&sound_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -139,21 +139,21 @@ impl State {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::PointList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: wgpu::FrontFace::Ccw, // 2.
                 cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: None, // 1.
             multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
+                count: 1,                         // 2.
+                mask: !0,                         // 3.
+                alpha_to_coverage_enabled: false, // 4.
             },
-            multiview: None,
+            multiview: None, // 5.
         });
 
         Self {
@@ -162,13 +162,13 @@ impl State {
             queue,
             config,
             size,
-            output,
+            output: Output::new(),
             vertex_buffer,
-            playing: false,
-            // uniform_buffer,
-            // sound_bind_group,
+            uniform_buffer,
+            sound_bind_group,
             render_pipeline,
             num_vertices: num_verticies as u32,
+            playing: false,
         }
     }
 
@@ -188,7 +188,15 @@ impl State {
 
     fn update(&mut self, _dt: std::time::Duration) {
         if self.playing {
-            let _data = self.output.buffer_data_dasp();
+            let data = self.output.buffer_data_dasp();
+
+            let vertecies = generate_vertexes(&data[0..data.len()]);
+
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+            );
         }
     }
 
@@ -224,7 +232,7 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            // render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }
@@ -272,6 +280,7 @@ pub async fn run() {
                     WindowEvent::DroppedFile(path_buf) => {
                         let file = File::open(path_buf.as_os_str()).unwrap();
                         state.output.load_file(file);
+                        state.playing = true;
                     }
                     WindowEvent::KeyboardInput {
                         input:

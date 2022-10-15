@@ -4,7 +4,7 @@ use dasp::signal::{self as signal, Signal};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
-    position: [f32; 3],
+    position: [f32; 2],
     color: [f32; 3],
 }
 
@@ -56,12 +56,12 @@ pub fn generate_vertexes(ring_buffer: &[i32]) -> Vec<Vertex> {
             + OUTPUT_START;
 
         ret.push(Vertex {
-            position: [x, left as f32, 0.0],
+            position: [x, left as f32],
             color: [1.0, 1.0, 1.0],
         });
 
         ret.push(Vertex {
-            position: [x, right as f32, 0.0],
+            position: [x, right as f32],
             color: [1.0, 1.0, 1.0],
         });
     }
@@ -71,23 +71,19 @@ pub fn generate_vertexes(ring_buffer: &[i32]) -> Vec<Vertex> {
 
 pub const DEMO_VERTS: &[Vertex] = &[
     Vertex {
-        position: [-1.0, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
+        position: [-1.0, 0.0],
+        color: [1.0, 1.0, 1.0],
     },
     Vertex {
-        position: [-0.5, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
+        position: [-0.5, 0.0],
+        color: [1.0, 1.0, 1.0],
     },
     Vertex {
-        position: [0.0, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
+        position: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0],
     },
     Vertex {
-        position: [0.5, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
-    },
-    Vertex {
-        position: [1.0, 0.0, 0.0],
-        color: [0.0, 0.0, 0.0],
+        position: [0.5, 0.0],
+        color: [1.0, 1.0, 1.0],
     },
 ];

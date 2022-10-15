@@ -12,12 +12,12 @@ pub struct Output {
     pub channels: cpal::ChannelCount,
     pub stream: Option<Stream>,
     pub position: Arc<Mutex<usize>>,
-    rb: Arc<Mutex<Fixed<[i32; 256]>>>,
+    rb: Arc<Mutex<Fixed<[i32; 2048]>>>,
 }
 
 impl Output {
     pub fn new() -> Self {
-        let rb = Arc::new(Mutex::new(Fixed::from([0; 256])));
+        let rb = Arc::new(Mutex::new(Fixed::from([0; 2048])));
 
         Self {
             buffer: Arc::new(Vec::new()),
