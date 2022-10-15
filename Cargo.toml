@@ -22,5 +22,7 @@ minimp3 = "0.5.1"
 dasp = { version = "0.11", features = ["all"] }
 ringbuf = "0.3.0"
 bytemuck = { version = "1.4", features = [ "derive" ] }
-rustfft = "6.0.1"
-realfft = "3.0.1"
+rb = "0.4.1"
+atomicring = "1.2.9"
+rtrb = "0.2"
+flume = "0.10.14"

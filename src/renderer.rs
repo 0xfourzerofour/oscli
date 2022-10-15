@@ -18,11 +18,11 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     output: Output,
     vertex_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    sound_bind_group: wgpu::BindGroup,
-    ring_buf_copy: dasp::ring_buffer::Fixed<[i32; 1024]>,
+    // uniform_buffer: wgpu::Buffer,
+    // sound_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     num_vertices: u32,
+    playing: bool,
 }
 
 impl State {
@@ -52,15 +52,13 @@ impl State {
             .await
             .unwrap();
 
-        let rb_copy = dasp::ring_buffer::Fixed::from([0 as i32; 1024]);
+        let output = Output::new();
 
-        let (data, _) = rb_copy.slices();
+        let data = output.buffer_data_dasp();
 
-        let vertecies = generate_vertexes(data);
+        let vertecies = generate_vertexes(&data[0..data.len()]);
 
         let num_verticies = vertecies.len();
-
-        println!("{}", num_verticies);
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -68,35 +66,35 @@ impl State {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        // let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //     label: Some("Vertex Buffer"),
+        //     contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+        //     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        // });
 
-        let sound_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-                label: Some("sound_bind_group_layout"),
-            });
+        // let sound_bind_group_layout =
+        //     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        //         entries: &[wgpu::BindGroupLayoutEntry {
+        //             binding: 0,
+        //             visibility: wgpu::ShaderStages::VERTEX,
+        //             ty: wgpu::BindingType::Buffer {
+        //                 ty: wgpu::BufferBindingType::Uniform,
+        //                 has_dynamic_offset: false,
+        //                 min_binding_size: None,
+        //             },
+        //             count: None,
+        //         }],
+        //         label: Some("sound_bind_group_layout"),
+        //     });
 
-        let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &sound_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-            label: Some("sound_bind_group"),
-        });
+        // let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        //     layout: &sound_bind_group_layout,
+        //     entries: &[wgpu::BindGroupEntry {
+        //         binding: 0,
+        //         resource: uniform_buffer.as_entire_binding(),
+        //     }],
+        //     label: Some("sound_bind_group"),
+        // });
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -117,7 +115,7 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&sound_bind_group_layout],
+                bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
 
@@ -162,11 +160,11 @@ impl State {
             queue,
             config,
             size,
-            output: Output::new(),
-            ring_buf_copy: rb_copy,
+            output,
             vertex_buffer,
-            uniform_buffer,
-            sound_bind_group,
+            playing: false,
+            // uniform_buffer,
+            // sound_bind_group,
             render_pipeline,
             num_vertices: num_verticies as u32,
         }
@@ -187,21 +185,9 @@ impl State {
     }
 
     fn update(&mut self, _dt: std::time::Duration) {
-        let d = self.output.cons.pop();
-
-        if let Some(data) = d {
-            self.ring_buf_copy.push(data);
+        if self.playing {
+            let _data = self.output.buffer_data_dasp();
         }
-
-        let (data, _) = self.ring_buf_copy.slices();
-
-        let vertecies = generate_vertexes(data);
-
-        self.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
-        );
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -236,7 +222,7 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
+            // render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }
@@ -258,73 +244,73 @@ pub async fn run() {
 
     let render_start_time = std::time::Instant::now();
 
-    event_loop.run(move |event, _, control_flow| {
-        match event {
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == window.id() => {
-                if !state.input(event) {
-                    match event {
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            input:
-                                KeyboardInput {
-                                    state: ElementState::Pressed,
-                                    virtual_keycode: Some(VirtualKeyCode::Escape),
-                                    ..
-                                },
-                            ..
-                        } => *control_flow = ControlFlow::Exit,
-                        WindowEvent::Resized(physical_size) => {
-                            state.resize(*physical_size);
+    event_loop.run(move |event, _, control_flow| match event {
+        Event::WindowEvent {
+            ref event,
+            window_id,
+        } if window_id == window.id() => {
+            if !state.input(event) {
+                match event {
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => *control_flow = ControlFlow::Exit,
+                    WindowEvent::Resized(physical_size) => {
+                        state.resize(*physical_size);
+                    }
+                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                        state.resize(**new_inner_size);
+                    }
+                    WindowEvent::DroppedFile(path_buf) => {
+                        let file = File::open(path_buf.as_os_str()).unwrap();
+                        state.output.load_file(file);
+                    }
+                    WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                virtual_keycode: Some(keycode),
+                                ..
+                            },
+                        ..
+                    } => match keycode {
+                        VirtualKeyCode::Space => {
+                            state.playing = true;
+                            state.output.play()
                         }
-                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                            // new_inner_size is &&mut so w have to dereference it twice
-                            state.resize(**new_inner_size);
+                        VirtualKeyCode::Up => state.output.forward(1 as f64),
+                        VirtualKeyCode::P => {
+                            state.playing = false;
+                            state.output.pause()
                         }
-                        WindowEvent::DroppedFile(path_buf) => {
-                            let file = File::open(path_buf.as_os_str()).unwrap();
-
-                            let output = Output::from_bytes(file);
-
-                            state.output = output;
-                        }
-                        WindowEvent::KeyboardInput {
-                            input:
-                                KeyboardInput {
-                                    virtual_keycode: Some(keycode),
-                                    ..
-                                },
-                            ..
-                        } => match keycode {
-                            VirtualKeyCode::Space => state.output.play(),
-                            VirtualKeyCode::Up => state.output.forward(1 as f64),
-                            VirtualKeyCode::P => state.output.pause(),
-                            _ => {}
-                        },
                         _ => {}
-                    }
+                    },
+                    _ => {}
                 }
             }
-            Event::RedrawRequested(window_id) if window_id == window.id() => {
-                let now = std::time::Instant::now();
-                let dt = now - render_start_time;
-                state.update(dt);
-                match state.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        state.resize(state.size)
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-
-                    Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-                }
-            }
-            Event::RedrawEventsCleared => {
-                window.request_redraw();
-            }
-            _ => {}
         }
+        Event::RedrawRequested(window_id) if window_id == window.id() => {
+            let now = std::time::Instant::now();
+            let dt = now - render_start_time;
+            state.update(dt);
+            match state.render() {
+                Ok(_) => {}
+                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    state.resize(state.size)
+                }
+                Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+
+                Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
+            }
+        }
+        Event::RedrawEventsCleared => {
+            window.request_redraw();
+        }
+        _ => {}
     });
 }

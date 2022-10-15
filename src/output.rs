@@ -1,8 +1,8 @@
-use core::mem::MaybeUninit;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
+use dasp::ring_buffer::Fixed;
+use flume::Receiver;
 use minimp3::{Decoder, Error, Frame};
-use ringbuf::{Consumer, Producer, SharedRb};
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
@@ -12,15 +12,12 @@ pub struct Output {
     pub channels: cpal::ChannelCount,
     pub stream: Option<Stream>,
     pub position: Arc<Mutex<usize>>,
-    pub prod: Producer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
-    pub cons: Consumer<i32, Arc<SharedRb<i32, Vec<MaybeUninit<i32>>>>>,
+    rb: Arc<Mutex<Fixed<[i32; 256]>>>,
 }
-
-// unsafe impl Send for Output {}
 
 impl Output {
     pub fn new() -> Self {
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
+        let rb = Arc::new(Mutex::new(Fixed::from([0; 256])));
 
         Self {
             buffer: Arc::new(Vec::new()),
@@ -28,12 +25,11 @@ impl Output {
             channels: 2,
             stream: None,
             position: Arc::new(Mutex::new(0)),
-            prod,
-            cons,
+            rb,
         }
     }
 
-    pub fn from_bytes(file: File) -> Self {
+    pub fn load_file(&mut self, file: File) {
         let mut decoder = Decoder::new(file);
         let mut buffer = Vec::new();
         let mut sample_rate = cpal::SampleRate(0);
@@ -56,24 +52,9 @@ impl Output {
             }
         }
 
-        let (prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
-
-        Self {
-            buffer: Arc::new(buffer),
-            sample_rate,
-            channels,
-            stream: None,
-            position: Arc::new(Mutex::new(0)),
-            prod,
-            cons,
-        }
-    }
-
-    pub fn play(&mut self) {
-        if let Some(ref stream) = self.stream {
-            stream.play().unwrap();
-            return;
-        }
+        self.buffer = Arc::new(buffer);
+        self.sample_rate = sample_rate;
+        self.channels = channels;
 
         let host = cpal::default_host();
 
@@ -95,12 +76,9 @@ impl Output {
             .expect("Could not find supported audio config")
             .with_sample_rate(self.sample_rate);
 
+        let rb = self.rb.clone();
         let buffer = self.buffer.clone();
         let position = self.position.clone();
-
-        let (mut prod, cons) = SharedRb::<i32, Vec<_>>::new(1024).split();
-
-        self.cons = cons;
 
         self.stream = Some(
             device
@@ -108,10 +86,15 @@ impl Output {
                     &supported_config.into(),
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                         let mut pos = position.lock().unwrap();
+                        let mut r_b = rb.lock().unwrap();
                         for sample in data.iter_mut() {
                             let value = if *pos < buffer.len() { buffer[*pos] } else { 0 };
                             *sample = cpal::Sample::from(&value);
-                            prod.push(value as i32);
+
+                            let mut n = r_b.clone();
+                            n.push(value as i32);
+                            *r_b = n;
+
                             *pos += 1;
                         }
                     },
@@ -119,6 +102,13 @@ impl Output {
                 )
                 .expect("Building output stream failed"),
         );
+    }
+
+    pub fn play(&mut self) {
+        if let Some(ref stream) = self.stream {
+            stream.play().unwrap();
+            return;
+        }
     }
 
     pub fn set_position(&mut self, seconds: f64) {
@@ -140,5 +130,13 @@ impl Output {
 
     fn seconds_to_samples(&self, seconds: f64) -> i32 {
         (self.sample_rate.0 as f64 * seconds) as i32 * self.channels as i32
+    }
+
+    pub fn buffer_data_dasp(&self) -> Vec<i32> {
+        let rb = *self.rb.lock().unwrap();
+
+        let (data, _) = rb.slices();
+
+        data.to_vec()
     }
 }

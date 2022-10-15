@@ -12,8 +12,8 @@ struct VertexOutput {
 };
 
 
-@group(0) @binding(0) 
-var<uniform> sound: VertexInput;
+// @group(0) @binding(0) 
+// var<uniform> sound: VertexInput;
 
 @vertex
 fn vs_main(
@@ -21,7 +21,7 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.color = model.color;
-    out.clip_position = vec4<f32>(model.position.x + sound.position.x, model.position.y + sound.position.y, model.position.z, 1.0);
+    out.clip_position = vec4<f32>(model.position, 1.0);
     return out;
 }
 
