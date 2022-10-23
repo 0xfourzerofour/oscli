@@ -5,7 +5,6 @@ use dasp::signal::{self as signal, Signal};
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
     position: [f32; 2],
-    color: [f32; 3],
 }
 
 impl Vertex {
@@ -62,7 +61,6 @@ pub fn generate_vertexes(ring_buffer: &[i32], channels: i16) -> Vec<Vec<Vertex>>
 
                 mono_return.push(Vertex {
                     position: [x, mono_chan],
-                    color: [1.0, 1.0, 1.0],
                 });
             }
 
@@ -94,12 +92,10 @@ pub fn generate_vertexes(ring_buffer: &[i32], channels: i16) -> Vec<Vec<Vertex>>
 
                 left_vec.push(Vertex {
                     position: [x, left],
-                    color: [1.0, 1.0, 1.0],
                 });
 
                 right_vec.push(Vertex {
                     position: [x, right],
-                    color: [1.0, 0.0, 1.0],
                 });
             }
 
