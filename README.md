@@ -27,8 +27,9 @@ drag your mp3 file into the window.
 - once FFT is implemented, render the audio in 3D space
 - zoom functionality
 
-
 ## Demo
+
+<img width="561" alt="Screen Shot 2022-10-23 at 9 38 08 pm" src="https://user-images.githubusercontent.com/36560907/197387454-1ca7e9aa-5998-432b-9411-5230ffdf80e4.png">
 
 
 https://user-images.githubusercontent.com/36560907/195976444-5775e6ee-2acd-49da-ad6f-1010f9fe631b.mov
