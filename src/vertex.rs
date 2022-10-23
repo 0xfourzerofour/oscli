@@ -28,43 +28,86 @@ const INPUT_END: f32 = 32000.0;
 const OUTPUT_START: f32 = -1.0;
 const OUTPUT_END: f32 = 1.0;
 
+const OUTPUT_START_LEFT: f32 = -1.0;
+const OUTPUT_END_LEFT: f32 = 0.0;
+
+const OUTPUT_START_RIGHT: f32 = 0.0;
+const OUTPUT_END_RIGHT: f32 = 1.0;
+
 struct Sample {
     left: i32,
     right: i32,
 }
 
-pub fn generate_vertexes(ring_buffer: &[i32]) -> Vec<Vertex> {
-    let signal: Vec<Sample> =
-        signal::from_interleaved_samples_iter::<_, [i32; 2]>(ring_buffer.iter().cloned())
-            .until_exhausted()
-            .map(|[left, right]| Sample { left, right })
-            .collect();
+pub fn generate_vertexes(ring_buffer: &[i32], channels: i16) -> Vec<Vec<Vertex>> {
+    let mut return_vec: Vec<Vec<Vertex>> = vec![];
 
-    let mut ret: Vec<Vertex> = vec![];
+    match channels {
+        1 => {
+            let signal: Vec<i32> = signal::from_iter(ring_buffer.iter().cloned())
+                .until_exhausted()
+                .map(|sample| sample)
+                .collect();
 
-    for (i, s) in signal.iter().enumerate() {
-        let frac: f32 = signal.len() as f32 / (i as f32 + 1.0);
+            let mut mono_return: Vec<Vertex> = vec![];
 
-        let x: f32 = (2.0 / frac) - 1.0;
+            for (i, s) in signal.iter().enumerate() {
+                let frac: f32 = signal.len() as f32 / (i as f32 + 1.0);
 
-        let left = ((s.left as f32 - INPUT_START) / (INPUT_END - INPUT_START))
-            * (OUTPUT_END - OUTPUT_START)
-            + OUTPUT_START;
+                let x: f32 = (2.0 / frac) - 1.0;
 
-        let right = ((s.right as f32 - INPUT_START) / (INPUT_END - INPUT_START))
-            * (OUTPUT_END - OUTPUT_START)
-            + OUTPUT_START;
+                let mono_chan = ((*s as f32 - INPUT_START) / (INPUT_END - INPUT_START))
+                    * (OUTPUT_END - OUTPUT_START)
+                    + OUTPUT_START;
 
-        ret.push(Vertex {
-            position: [x, left as f32],
-            color: [1.0, 1.0, 1.0],
-        });
+                mono_return.push(Vertex {
+                    position: [x, mono_chan],
+                    color: [1.0, 1.0, 1.0],
+                });
+            }
 
-        ret.push(Vertex {
-            position: [x, right as f32],
-            color: [1.0, 1.0, 1.0],
-        });
+            return_vec.push(mono_return);
+            return_vec
+        }
+        2 => {
+            let signal: Vec<Sample> =
+                signal::from_interleaved_samples_iter::<_, [i32; 2]>(ring_buffer.iter().cloned())
+                    .until_exhausted()
+                    .map(|[left, right]| Sample { left, right })
+                    .collect();
+
+            let mut left_vec: Vec<Vertex> = vec![];
+            let mut right_vec: Vec<Vertex> = vec![];
+
+            for (i, s) in signal.iter().enumerate() {
+                let frac: f32 = signal.len() as f32 / (i as f32 + 1.0);
+
+                let x: f32 = (2.0 / frac) - 1.0;
+
+                let left = ((s.left as f32 - INPUT_START) / (INPUT_END - INPUT_START))
+                    * (OUTPUT_END_LEFT - OUTPUT_START_LEFT)
+                    + OUTPUT_START_LEFT;
+
+                let right = ((s.right as f32 - INPUT_START) / (INPUT_END - INPUT_START))
+                    * (OUTPUT_END_RIGHT - OUTPUT_START_RIGHT)
+                    + OUTPUT_START_RIGHT;
+
+                left_vec.push(Vertex {
+                    position: [x, left],
+                    color: [1.0, 1.0, 1.0],
+                });
+
+                right_vec.push(Vertex {
+                    position: [x, right],
+                    color: [1.0, 0.0, 1.0],
+                });
+            }
+
+            return_vec.push(left_vec);
+            return_vec.push(right_vec);
+
+            return_vec
+        }
+        _ => return_vec,
     }
-
-    ret
 }

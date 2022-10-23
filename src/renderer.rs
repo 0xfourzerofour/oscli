@@ -18,8 +18,6 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     output: Output,
     vertex_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    sound_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     num_vertices: u32,
     playing: bool,
@@ -56,46 +54,21 @@ impl State {
 
         let data = output.buffer_data_dasp();
 
-        let vertecies = generate_vertexes(&data[0..data.len()]);
+        let vertecies = generate_vertexes(&data[0..data.len()], output.channels as i16);
 
-        let num_verticies = vertecies.len();
+        let mut num_verticies = 0;
 
-        println!("{}", num_verticies);
+        let mut buffer_content = vec![];
+
+        for mut chan in vertecies {
+            num_verticies = num_verticies + chan.len();
+            buffer_content.append(&mut chan);
+        }
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertecies[0..num_verticies]),
+            contents: bytemuck::cast_slice(&buffer_content[0..buffer_content.len()]),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let sound_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-                label: Some("sound_bind_group_layout"),
-            });
-
-        let sound_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &sound_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-            label: Some("sound_bind_group"),
         });
 
         let config = wgpu::SurfaceConfiguration {
@@ -117,7 +90,7 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&sound_bind_group_layout],
+                bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
 
@@ -139,7 +112,7 @@ impl State {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::PointList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw, // 2.
                 cull_mode: Some(wgpu::Face::Back),
@@ -164,8 +137,6 @@ impl State {
             size,
             output: Output::new(),
             vertex_buffer,
-            uniform_buffer,
-            sound_bind_group,
             render_pipeline,
             num_vertices: num_verticies as u32,
             playing: false,
@@ -190,12 +161,18 @@ impl State {
         if self.playing {
             let data = self.output.buffer_data_dasp();
 
-            let vertecies = generate_vertexes(&data[0..data.len()]);
+            let vertecies = generate_vertexes(&data[0..data.len()], self.output.channels as i16);
+
+            let mut chan_data = vec![];
+
+            for mut chan in vertecies {
+                chan_data.append(&mut chan);
+            }
 
             self.queue.write_buffer(
                 &self.vertex_buffer,
                 0,
-                bytemuck::cast_slice(&vertecies[0..vertecies.len()]),
+                bytemuck::cast_slice(&chan_data[0..chan_data.len()]),
             );
         }
     }
@@ -232,7 +209,7 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.sound_bind_group, &[]);
+
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }
