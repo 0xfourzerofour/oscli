@@ -1,4 +1,5 @@
 use crate::audio::Peak;
+use anyhow::Result;
 use wgpu::{
     include_wgsl, util::DeviceExt, BindGroup, Buffer, Device, Queue, RenderPipeline, Surface,
     SurfaceConfiguration,
@@ -33,8 +34,8 @@ pub struct WaveformRenderer {
 }
 
 impl WaveformRenderer {
-    pub async fn new(window: &Window, peaks: &[Peak]) -> Self {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    pub async fn new(window: &'static Window, peaks: &[Peak]) -> Self {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
@@ -114,7 +115,7 @@ impl WaveformRenderer {
             vertex: wgpu::VertexState {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
@@ -128,7 +129,7 @@ impl WaveformRenderer {
             fragment: Some(wgpu::FragmentState {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(wgpu::BlendState::REPLACE),

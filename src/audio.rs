@@ -6,7 +6,6 @@ use cpal::{
 use ringbuf::{traits::Split, Consumer, HeapRb, Producer};
 use std::{
     fs::File,
-    io::{BufReader, Seek},
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -16,8 +15,8 @@ use std::{
 };
 use symphonia::{
     core::{
-        audio::{AudioBufferRef, Signal},
-        codecs::{DecoderOptions, CODEC_TYPE_NULL},
+        audio::AudioBufferRef,
+        codecs::DecoderOptions,
         errors::Error as SymphError,
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
         io::MediaSourceStream,
@@ -127,7 +126,9 @@ impl Media {
             let packet = match reader.next_packet() {
                 Ok(p) => p,
                 Err(SymphError::ResetRequired) => continue,
-                Err(SymphError::Eof) => break,
+                Err(SymphError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
                 Err(e) => bail!("Decode error: {}", e),
             };
             if packet.track_id() != reader.default_track().unwrap().id {
@@ -226,7 +227,9 @@ impl Media {
             while is_playing.load(Ordering::Relaxed) && !is_done.load(Ordering::Relaxed) {
                 let packet = match reader.next_packet() {
                     Ok(p) => p,
-                    Err(SymphError::Eof) => {
+                    Err(SymphError::IoError(e))
+                        if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                    {
                         is_done.store(true, Ordering::Relaxed);
                         break;
                     }

@@ -1,5 +1,4 @@
-use crate::{audio::Media, render::WaveformRenderer};
-use std::sync::Arc;
+use crate::{audio::Media, renderer::WaveformRenderer};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -107,9 +106,13 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed {
                     if let Some(media) = &mut self.media {
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Space) => media.play().ok(),
-                            PhysicalKey::Code(KeyCode::KeyP) => media.pause().ok(),
-                            PhysicalKey::Code(KeyCode::KeyR) => media.reset().ok(),
+                            PhysicalKey::Code(KeyCode::Space) => media.play().expect("Should play"),
+                            PhysicalKey::Code(KeyCode::KeyP) => {
+                                media.pause().expect("Should pause")
+                            }
+                            PhysicalKey::Code(KeyCode::KeyR) => {
+                                media.reset().expect("Should reset")
+                            }
                             PhysicalKey::Code(KeyCode::ArrowLeft) => {
                                 self.scroll_offset -= 0.1 / self.zoom;
                                 self.scroll_offset = self.scroll_offset.max(0.0);
