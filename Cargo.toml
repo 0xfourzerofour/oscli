@@ -6,13 +6,14 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.65"
-wgpu = "0.14.0"
+wgpu = "27.0.1"
 cfg-if = "1"
-winit = "0.27.1"
+winit = "0.30.12"
 env_logger = "0.9"
 log = "0.4"
-pollster = "0.2"
-cpal = "0.14"
-minimp3 = "0.5.1"
+cpal = "0.16"
+minimp3 = "0.6.1"
 dasp = { version = "0.11", features = ["all"] }
-bytemuck = { version = "1.4", features = [ "derive" ] }
+bytemuck = { version = "1.24", features = [ "derive" ] }
+ringbuf = "0.4.8"
+symphonia = "0.5.4"
