@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use cpal::{
-    traits::{DeviceTrait, HostTrait},
+    traits::{DeviceTrait, HostTrait, StreamTrait},
     ChannelCount, SampleRate, Stream,
 };
 use ringbuf::{traits::Split, Consumer, HeapRb, Producer};
@@ -55,7 +55,7 @@ impl Media {
     pub fn try_from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file_path = path.as_ref().to_string_lossy().to_string();
         let file = File::open(&path)?;
-        let mss = MediaSourceStream::new(Box::new(BufReader::new(file)), Default::default());
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
         let probed = get_probe().format(
@@ -264,7 +264,7 @@ impl Media {
         let target_sample = (time_secs * self.sample_rate.0 as f64) as u64 * self.channels as u64;
 
         let file = File::open(&self.file_path)?;
-        let mss = MediaSourceStream::new(Box::new(BufReader::new(file)), Default::default());
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let probed = get_probe().format(
             &Hint::new().with_extension("mp3"),
             mss,
@@ -335,7 +335,7 @@ impl Media {
         }
 
         let file = File::open(&self.file_path)?;
-        let mss = MediaSourceStream::new(Box::new(BufReader::new(file)), Default::default());
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let probed = get_probe().format(
             &Hint::new().with_extension("mp3"),
             mss,
