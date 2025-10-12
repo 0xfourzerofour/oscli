@@ -14,5 +14,5 @@ log = "0.4"
 cpal = "0.16"
 bytemuck = { version = "1.24", features = [ "derive" ] }
 ringbuf = "0.4.8"
-symphonia = "0.5.4"
+symphonia = { version = "0.5.4", features = ["mp3"] }
 pollster = "0.4.0"

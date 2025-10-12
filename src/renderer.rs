@@ -1,5 +1,6 @@
 use crate::audio::Peak;
 use anyhow::Result;
+use std::sync::Arc;
 use wgpu::{
     include_wgsl, util::DeviceExt, BindGroup, Buffer, Device, Queue, RenderPipeline, Surface,
     SurfaceConfiguration,
@@ -21,8 +22,8 @@ struct Uniforms {
     _padding: f32,
 }
 
-pub struct WaveformRenderer {
-    surface: Surface<'static>,
+pub struct WaveformRenderer<'a> {
+    surface: Surface<'a>,
     device: Device,
     queue: Queue,
     config: SurfaceConfiguration,
@@ -33,13 +34,13 @@ pub struct WaveformRenderer {
     bind_group: BindGroup,
 }
 
-impl WaveformRenderer {
-    pub async fn new(window: &'static Window, peaks: &[Peak]) -> Self {
+impl<'a> WaveformRenderer<'a> {
+    pub async fn new(window: &Arc<Window>, peaks: &[Peak]) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

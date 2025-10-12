@@ -3,7 +3,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     ChannelCount, SampleRate, Stream,
 };
-use ringbuf::{traits::Split, Consumer, HeapRb, Producer};
+use ringbuf::{traits::{Consumer, Observer, Producer, Split}, HeapCons, HeapProd, HeapRb};
 use std::{
     fs::File,
     path::Path,
@@ -15,7 +15,7 @@ use std::{
 };
 use symphonia::{
     core::{
-        audio::AudioBufferRef,
+        audio::{AudioBufferRef, Signal},
         codecs::DecoderOptions,
         errors::Error as SymphError,
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
@@ -43,8 +43,8 @@ pub struct Media {
     pub peaks: Vec<Peak>,
     pub position: Arc<AtomicU32>,
     stream: Option<Stream>,
-    producer: Option<Producer<f32>>,
-    consumer: Option<Consumer<f32>>,
+    producer: Option<HeapProd<f32>>,
+    consumer: Option<HeapCons<f32>>,
     decoding_thread: Option<JoinHandle<()>>,
     is_playing: Arc<AtomicBool>,
     is_done: Arc<AtomicBool>,
@@ -67,8 +67,9 @@ impl Media {
 
         let track = reader.default_track().ok_or(anyhow::anyhow!("No track"))?;
         let track_id = track.id;
+        let codec_params = track.codec_params.clone();
         let decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())?;
+            .make(&codec_params, &DecoderOptions::default())?;
         let sample_rate = SampleRate(
             track
                 .codec_params
@@ -87,6 +88,19 @@ impl Media {
             * channels as u64;
 
         let peaks = Self::compute_peaks(&mut reader, &decoder, duration_samples)?;
+
+        // Reopen the file for playback since the reader is now at EOF after computing peaks
+        let file = File::open(&path)?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let probed = get_probe().format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )?;
+        let reader = probed.format;
+        let decoder = symphonia::default::get_codecs()
+            .make(&codec_params, &DecoderOptions::default())?;
 
         let buffer_capacity = (sample_rate.0 as usize) * (channels as usize) * 2;
         let rb = HeapRb::<f32>::new(buffer_capacity);
@@ -138,8 +152,54 @@ impl Media {
             match tmp_decoder.decode(&packet) {
                 Ok(decoded) => {
                     let buf: AudioBufferRef = decoded;
-                    let planes = buf.planes();
-                    let samples = planes.planes()[0];
+                    let samples: Vec<f32> = match buf {
+                        AudioBufferRef::F32(buffer) => buffer.chan(0).to_vec(),
+                        AudioBufferRef::U8(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| (s as f32 - 128.0) / 128.0)
+                                .collect()
+                        },
+                        AudioBufferRef::U16(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                                .collect()
+                        },
+                        AudioBufferRef::U24(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| (s.inner() as f32 - 8388608.0) / 8388608.0)
+                                .collect()
+                        },
+                        AudioBufferRef::U32(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| (s as f32 - 2147483648.0) / 2147483648.0)
+                                .collect()
+                        },
+                        AudioBufferRef::S8(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| s as f32 / 128.0)
+                                .collect()
+                        },
+                        AudioBufferRef::S16(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| s as f32 / 32768.0)
+                                .collect()
+                        },
+                        AudioBufferRef::S24(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| s.inner() as f32 / 8388608.0)
+                                .collect()
+                        },
+                        AudioBufferRef::S32(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| s as f32 / 2147483648.0)
+                                .collect()
+                        },
+                        AudioBufferRef::F64(buffer) => {
+                            buffer.chan(0).iter()
+                                .map(|&s| s as f32)
+                                .collect()
+                        },
+                    };
 
                     for chunk in samples.chunks(block_size as usize) {
                         let mut min = f32::MAX;
@@ -176,21 +236,26 @@ impl Media {
             .ok_or(anyhow::anyhow!("No config"))?
             .with_sample_rate(self.sample_rate);
 
-        let consumer = self
+        let mut consumer = self
             .consumer
             .take()
             .ok_or(anyhow::anyhow!("Consumer taken"))?;
         let position = Arc::clone(&self.position);
         let is_done = Arc::clone(&self.is_done);
 
+        let mut callback_count = 0;
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let mut pos = position.load(Ordering::Relaxed) as usize;
+                callback_count += 1;
+                if callback_count % 100 == 0 {
+                    eprintln!("Audio callback #{}, buffer size: {}", callback_count, data.len());
+                }
+                let mut samples_read = 0;
                 for sample in data.iter_mut() {
-                    if let Some(value) = consumer.pop() {
+                    if let Some(value) = consumer.try_pop() {
                         *sample = value;
-                        pos += 1;
+                        samples_read += 1;
                     } else {
                         *sample = 0.0;
                         if is_done.load(Ordering::Relaxed) {
@@ -198,7 +263,11 @@ impl Media {
                         }
                     }
                 }
-                position.store(pos as u32, Ordering::Relaxed);
+                // Update position based on samples actually played
+                position.fetch_add(samples_read, Ordering::Relaxed);
+                if callback_count % 100 == 0 {
+                    eprintln!("Read {} samples from ringbuf", samples_read);
+                }
             },
             |err| eprintln!("Stream error: {:?}", err),
             None,
@@ -220,10 +289,11 @@ impl Media {
             .ok_or(anyhow::anyhow!("Producer taken"))?;
         let is_playing = Arc::clone(&self.is_playing);
         let is_done = Arc::clone(&self.is_done);
-        let position = Arc::clone(&self.position);
         let track_id = self.track_id;
 
         let thread = thread::spawn(move || {
+            eprintln!("Decoding thread started");
+            let mut packet_count = 0;
             while is_playing.load(Ordering::Relaxed) && !is_done.load(Ordering::Relaxed) {
                 let packet = match reader.next_packet() {
                     Ok(p) => p,
@@ -243,17 +313,121 @@ impl Media {
                 }
 
                 if let Ok(decoded) = decoder.decode(&packet) {
+                    packet_count += 1;
+                    if packet_count % 100 == 0 {
+                        eprintln!("Decoded {} packets", packet_count);
+                    }
                     let buf: AudioBufferRef = decoded;
-                    let planes = buf.planes();
-                    let samples = planes.planes()[0];
 
-                    for &sample in samples {
+                    // Get number of channels and frames
+                    let num_channels = buf.spec().channels.count();
+                    let num_frames = buf.frames();
+
+                    // Interleave channels into a single Vec<f32>
+                    let mut samples: Vec<f32> = Vec::with_capacity(num_frames * num_channels);
+
+                    match buf {
+                        AudioBufferRef::F32(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    samples.push(buffer.chan(chan_idx)[frame_idx]);
+                                }
+                            }
+                        },
+                        AudioBufferRef::U8(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push((s as f32 - 128.0) / 128.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::U16(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push((s as f32 - 32768.0) / 32768.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::U24(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push((s.inner() as f32 - 8388608.0) / 8388608.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::U32(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push((s as f32 - 2147483648.0) / 2147483648.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::S8(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push(s as f32 / 128.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::S16(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push(s as f32 / 32768.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::S24(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push(s.inner() as f32 / 8388608.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::S32(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push(s as f32 / 2147483648.0);
+                                }
+                            }
+                        },
+                        AudioBufferRef::F64(buffer) => {
+                            for frame_idx in 0..num_frames {
+                                for chan_idx in 0..num_channels {
+                                    let s = buffer.chan(chan_idx)[frame_idx];
+                                    samples.push(s as f32);
+                                }
+                            }
+                        },
+                    };
+
+                    let mut pushed = 0;
+                    for &sample in &samples {
+                        // Break out if we're no longer playing (e.g., during seek)
+                        if !is_playing.load(Ordering::Relaxed) {
+                            break;
+                        }
                         while producer.is_full() {
+                            // Check again in case we're paused/seeking
+                            if !is_playing.load(Ordering::Relaxed) {
+                                break;
+                            }
                             thread::sleep(std::time::Duration::from_millis(10));
                         }
-                        producer.push(sample).ok();
+                        if producer.try_push(sample).is_ok() {
+                            pushed += 1;
+                        }
                     }
-                    position.fetch_add(samples.len() as u32, Ordering::Relaxed);
+                    if packet_count % 100 == 0 {
+                        eprintln!("Pushed {} samples to ringbuf", pushed);
+                    }
                 }
             }
         });
@@ -263,9 +437,20 @@ impl Media {
     }
 
     pub fn seek(&mut self, time_secs: f64) -> Result<()> {
+        eprintln!("Seek to {} seconds", time_secs);
+
+        // Stop playback and decoding
         self.pause()?;
+        self.is_done.store(false, Ordering::Relaxed);
+
+        // Wait for decoding thread to stop
+        if let Some(thread) = self.decoding_thread.take() {
+            thread.join().ok();
+        }
+
         let target_sample = (time_secs * self.sample_rate.0 as f64) as u64 * self.channels as u64;
 
+        // Reopen and seek the file
         let file = File::open(&self.file_path)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let probed = get_probe().format(
@@ -287,32 +472,44 @@ impl Media {
         }
 
         self.position.store(target_sample as u32, Ordering::Relaxed);
-        self.is_done.store(false, Ordering::Relaxed);
 
+        // Drop old stream and recreate with new ringbuf
+        self.stream = None;
         let buffer_capacity = (self.sample_rate.0 as usize) * (self.channels as usize) * 2;
         let rb = HeapRb::<f32>::new(buffer_capacity);
         let (producer, consumer) = rb.split();
         self.producer = Some(producer);
         self.consumer = Some(consumer);
 
-        self.start_decoding()?;
+        // Restart playback
         self.play()?;
         Ok(())
     }
 
     pub fn play(&mut self) -> Result<()> {
+        eprintln!("Play called");
         if self.stream.is_none() {
+            eprintln!("Creating stream...");
             self.into_stream()?;
-        }
-        if let Some(stream) = &self.stream {
+            eprintln!("Stream created");
+            self.is_playing.store(true, Ordering::Relaxed);
+            eprintln!("Starting decoding...");
+            self.start_decoding()?;
+            eprintln!("Decoding started");
+            // Give the decoder a moment to fill the buffer
+            thread::sleep(std::time::Duration::from_millis(100));
+        } else {
+            eprintln!("Stream already exists, resuming");
             self.is_playing.store(true, Ordering::Relaxed);
             if self.decoding_thread.is_none() {
                 self.start_decoding()?;
             }
-            while self.consumer.as_ref().unwrap().len() < (self.sample_rate.0 as usize / 2) {
-                thread::sleep(std::time::Duration::from_millis(50));
-            }
+        }
+
+        if let Some(stream) = &self.stream {
+            eprintln!("Calling stream.play()");
             stream.play()?;
+            eprintln!("Stream playing!");
             Ok(())
         } else {
             bail!("No stream");
@@ -345,10 +542,11 @@ impl Media {
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )?;
+        let codec_params = probed.format.default_track().unwrap().codec_params.clone();
         self.reader = Some(probed.format);
 
         self.decoder = Some(symphonia::default::get_codecs().make(
-            &probed.format.default_track().unwrap().codec_params,
+            &codec_params,
             &DecoderOptions::default(),
         )?);
 

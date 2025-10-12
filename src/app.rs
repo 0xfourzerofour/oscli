@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{audio::Media, renderer::WaveformRenderer};
 use winit::{
     application::ApplicationHandler,
@@ -9,8 +11,8 @@ use winit::{
 };
 
 pub struct App {
-    window: Option<Window>,
-    renderer: Option<WaveformRenderer>,
+    window: Option<Arc<Window>>,
+    renderer: Option<WaveformRenderer<'static>>,
     media: Option<Media>,
     zoom: f32,
     scroll_offset: f32,
@@ -35,12 +37,15 @@ impl ApplicationHandler for App {
         let attributes = Window::default_attributes()
             .with_title("Audio Player with Waveform")
             .with_inner_size(LogicalSize::new(800, 600));
-        let window = event_loop.create_window(attributes).unwrap();
+
+        let window = Arc::new(event_loop.create_window(attributes).unwrap());
         let media = Media::try_from_path("example.mp3").unwrap();
         let renderer = pollster::block_on(WaveformRenderer::new(&window, &media.peaks));
-        self.window = Some(window);
+        self.window = Some(window.clone());
         self.renderer = Some(renderer);
         self.media = Some(media);
+
+        window.request_redraw();
         event_loop.set_control_flow(ControlFlow::Poll);
     }
 
@@ -106,12 +111,20 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed {
                     if let Some(media) = &mut self.media {
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Space) => media.play().expect("Should play"),
+                            PhysicalKey::Code(KeyCode::Space) => {
+                                if let Err(e) = media.play() {
+                                    eprintln!("Play error: {}", e);
+                                }
+                            }
                             PhysicalKey::Code(KeyCode::KeyP) => {
-                                media.pause().expect("Should pause")
+                                if let Err(e) = media.pause() {
+                                    eprintln!("Pause error: {}", e);
+                                }
                             }
                             PhysicalKey::Code(KeyCode::KeyR) => {
-                                media.reset().expect("Should reset")
+                                if let Err(e) = media.reset() {
+                                    eprintln!("Reset error: {}", e);
+                                }
                             }
                             PhysicalKey::Code(KeyCode::ArrowLeft) => {
                                 self.scroll_offset -= 0.1 / self.zoom;
