@@ -29,13 +29,15 @@ pub struct WaveformRenderer<'a> {
     config: SurfaceConfiguration,
     render_pipeline: RenderPipeline,
     vertex_buffer: Buffer,
-    playhead_buffer: Buffer,
+    playhead_line_buffer: Buffer,
+    playhead_triangle_buffer: Buffer,
     uniform_buffer: Buffer,
     bind_group: BindGroup,
+    vertex_count: u32,
 }
 
 impl<'a> WaveformRenderer<'a> {
-    pub async fn new(window: &Arc<Window>, peaks: &[Peak]) -> Self {
+    pub async fn new(window: &Arc<Window>) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
@@ -138,8 +140,10 @@ impl<'a> WaveformRenderer<'a> {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -147,28 +151,7 @@ impl<'a> WaveformRenderer<'a> {
             multiview: None,
         });
 
-        let vertices: Vec<Vertex> = peaks
-            .iter()
-            .enumerate()
-            .flat_map(|(i, peak)| {
-                let x = i as f32 / peaks.len() as f32;
-                vec![
-                    Vertex {
-                        position: [x, peak.max],
-                    },
-                    Vertex {
-                        position: [x, peak.min],
-                    },
-                ]
-            })
-            .collect();
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let playhead_vertices = vec![
+        let vertices = vec![
             Vertex {
                 position: [0.0, -1.0],
             },
@@ -176,9 +159,40 @@ impl<'a> WaveformRenderer<'a> {
                 position: [0.0, 1.0],
             },
         ];
-        let playhead_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Playhead Buffer"),
-            contents: bytemuck::cast_slice(&playhead_vertices),
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Playhead line (vertical thin rectangle) - using screen coordinates (clip space)
+        // Use special x coordinate (-10.0) to mark these as playhead vertices
+        let line_width = 0.004;
+        let playhead_line_vertices = vec![
+            Vertex { position: [-10.0 - line_width, -1.0] },
+            Vertex { position: [-10.0 + line_width, -1.0] },
+            Vertex { position: [-10.0 - line_width, 1.0] },
+            Vertex { position: [-10.0 + line_width, -1.0] },
+            Vertex { position: [-10.0 + line_width, 1.0] },
+            Vertex { position: [-10.0 - line_width, 1.0] },
+        ];
+        let playhead_line_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Playhead Line Buffer"),
+            contents: bytemuck::cast_slice(&playhead_line_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Playhead triangle (upside-down at top) - using special x coordinate
+        let triangle_size = 0.03;
+        let playhead_triangle_vertices = vec![
+            Vertex { position: [-10.0 - triangle_size, 1.0] },      // Top left
+            Vertex { position: [-10.0 + triangle_size, 1.0] },      // Top right
+            Vertex { position: [-10.0, 1.0 - triangle_size * 1.5] }, // Bottom center
+        ];
+        let playhead_triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Playhead Triangle Buffer"),
+            contents: bytemuck::cast_slice(&playhead_triangle_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
@@ -189,10 +203,56 @@ impl<'a> WaveformRenderer<'a> {
             config,
             render_pipeline,
             vertex_buffer,
-            playhead_buffer,
+            playhead_line_buffer,
+            playhead_triangle_buffer,
             uniform_buffer,
             bind_group,
+            vertex_count: 2,
         }
+    }
+
+    pub fn add_peaks(&mut self, peaks: &[Peak]) {
+        // Separate left (top) and right (bottom) channels
+        let mut vertices: Vec<Vertex> = Vec::with_capacity(peaks.len() * 12);
+
+        for (i, peak) in peaks.iter().enumerate() {
+            let x1 = i as f32 / peaks.len() as f32;
+            let x2 = (i + 1) as f32 / peaks.len() as f32;
+
+            // Left channel amplitude (top half, 0.0 to 1.0)
+            let amp_left = (peak.max_left - peak.min_left) / 2.0;
+
+            // Left channel (top half)
+            vertices.push(Vertex { position: [x1, 0.0] });
+            vertices.push(Vertex { position: [x1, amp_left] });
+            vertices.push(Vertex { position: [x2, 0.0] });
+
+            vertices.push(Vertex { position: [x1, amp_left] });
+            vertices.push(Vertex { position: [x2, amp_left] });
+            vertices.push(Vertex { position: [x2, 0.0] });
+
+            // Right channel amplitude (bottom half, 0.0 to -1.0)
+            let amp_right = (peak.max_right - peak.min_right) / 2.0;
+
+            // Right channel (bottom half)
+            vertices.push(Vertex { position: [x1, 0.0] });
+            vertices.push(Vertex { position: [x2, 0.0] });
+            vertices.push(Vertex { position: [x1, -amp_right] });
+
+            vertices.push(Vertex { position: [x2, 0.0] });
+            vertices.push(Vertex { position: [x2, -amp_right] });
+            vertices.push(Vertex { position: [x1, -amp_right] });
+        }
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        self.vertex_buffer = vertex_buffer;
+        self.vertex_count = vertices.len() as u32;
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -230,9 +290,9 @@ impl<'a> WaveformRenderer<'a> {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.05,
+                            g: 0.05,
+                            b: 0.08,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -247,14 +307,15 @@ impl<'a> WaveformRenderer<'a> {
 
             // Draw waveform
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(
-                0..self.vertex_buffer.size() as u32 / std::mem::size_of::<Vertex>() as u32,
-                0..1,
-            );
+            render_pass.draw(0..self.vertex_count, 0..1);
 
-            // Draw playhead
-            render_pass.set_vertex_buffer(0, self.playhead_buffer.slice(..));
-            render_pass.draw(0..2, 0..1);
+            // Draw playhead line
+            render_pass.set_vertex_buffer(0, self.playhead_line_buffer.slice(..));
+            render_pass.draw(0..6, 0..1);
+
+            // Draw playhead triangle
+            render_pass.set_vertex_buffer(0, self.playhead_triangle_buffer.slice(..));
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

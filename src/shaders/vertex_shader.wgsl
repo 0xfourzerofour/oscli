@@ -20,15 +20,36 @@ struct VertexOutput {
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    let x = (input.position.x - uniforms.scroll_offset) * uniforms.zoom * 2.0 - 1.0;
+
+    // Check if this is a playhead vertex (marked with x < -5.0)
+    let is_playhead = input.position.x < -5.0;
+
+    var x: f32;
+    if (is_playhead) {
+        // Playhead stays in center of screen - offset from -10.0 to 0.0
+        x = input.position.x + 10.0;
+    } else {
+        // Waveform scrolls and zooms
+        x = (input.position.x - uniforms.scroll_offset) * uniforms.zoom * 2.0 - 1.0;
+    }
+
     let y = input.position.y;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
 
-    // Color waveform green, playhead red
-    if (abs(input.position.x - uniforms.playhead_pos) < 0.001) {
-        out.color = vec4<f32>(1.0, 0.0, 0.0, 1.0); // Red for playhead
+    // Color based on whether this is playhead or waveform
+    let amplitude = abs(y);
+
+    if (is_playhead) {
+        // Playhead (line and triangle) - bright red
+        out.color = vec4<f32>(1.0, 0.0, 0.0, 1.0);
     } else {
-        out.color = vec4<f32>(0.0, 1.0, 0.0, 1.0); // Green for waveform
+        // Vibrant gradient with brighter transients (high amplitude)
+        // Low amplitude: cyan/blue, High amplitude: bright yellow/orange (transients)
+        let intensity = pow(amplitude * 2.0, 1.5); // Exponential for more pop
+        let r = 0.2 + intensity * 1.8;
+        let g = 0.6 + intensity * 0.8;
+        let b = 1.0 - intensity * 0.7;
+        out.color = vec4<f32>(r, g, b, 1.0);
     }
     return out;
 }

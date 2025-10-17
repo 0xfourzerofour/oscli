@@ -14,7 +14,7 @@ pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<WaveformRenderer<'static>>,
     media: Option<Media>,
-    zoom: f32,
+    time_window: f32, // seconds to show
     scroll_offset: f32,
     mouse_pos: (f32, f32),
 }
@@ -25,7 +25,7 @@ impl Default for App {
             window: None,
             renderer: None,
             media: None,
-            zoom: 1.0,
+            time_window: 1.0, // Start with 1 second window
             scroll_offset: 0.0,
             mouse_pos: (0.0, 0.0),
         }
@@ -36,14 +36,13 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
             .with_title("Audio Player with Waveform")
-            .with_inner_size(LogicalSize::new(800, 600));
+            .with_inner_size(LogicalSize::new(800, 200));
 
         let window = Arc::new(event_loop.create_window(attributes).unwrap());
-        let media = Media::try_from_path("example.mp3").unwrap();
-        let renderer = pollster::block_on(WaveformRenderer::new(&window, &media.peaks));
+        let renderer = pollster::block_on(WaveformRenderer::new(&window));
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
-        self.media = Some(media);
+        self.media = None;
 
         window.request_redraw();
         event_loop.set_control_flow(ControlFlow::Poll);
@@ -67,8 +66,20 @@ impl ApplicationHandler for App {
                     let playhead_pos = media.position.load(std::sync::atomic::Ordering::Relaxed)
                         as f32
                         / media.duration_samples as f32;
+
+                    // Calculate zoom to show time_window seconds
+                    let duration_secs = media.duration_samples as f32
+                        / media.sample_rate.0 as f32
+                        / media.channels as f32;
+                    let window_zoom = duration_secs / self.time_window;
+
+                    // Center the view on the playhead
+                    let window_scroll = (playhead_pos - 0.5 / window_zoom)
+                        .max(0.0)
+                        .min(1.0 - 1.0 / window_zoom);
+
                     renderer
-                        .render(self.zoom, self.scroll_offset, playhead_pos)
+                        .render(window_zoom, window_scroll, playhead_pos)
                         .ok();
                     window.request_redraw(); // Continuous redraw for playhead
                 }
@@ -84,27 +95,42 @@ impl ApplicationHandler for App {
                 if let (Some(media), Some(window)) = (&mut self.media, &self.window) {
                     let size = window.inner_size();
                     let waveform_width = size.width as f32;
-                    let seek_frac =
-                        (self.mouse_pos.0 / waveform_width) / self.zoom + self.scroll_offset;
-                    let seek_time = seek_frac
-                        * (media.duration_samples as f32
-                            / media.sample_rate.0 as f32
-                            / media.channels as f32);
-                    media.seek(seek_time as f64).ok();
+
+                    // Current time in seconds
+                    let current_time = media.position.load(std::sync::atomic::Ordering::Relaxed) as f32
+                        / media.sample_rate.0 as f32
+                        / media.channels as f32;
+
+                    // Click position relative to center (-0.5 to 0.5)
+                    let click_relative = (self.mouse_pos.0 / waveform_width) - 0.5;
+
+                    // Calculate seek time based on visible window
+                    let seek_time = current_time + (click_relative * self.time_window);
+                    media.seek(seek_time.max(0.0) as f64).ok();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                match delta {
-                    MouseScrollDelta::LineDelta(_, y) => {
-                        if y > 0.0 {
-                            self.zoom *= 1.1; // Zoom in
-                        } else {
-                            self.zoom /= 1.1; // Zoom out
-                        }
-                        self.zoom = self.zoom.clamp(1.0, 10.0);
-                        self.scroll_offset = self.scroll_offset.min(1.0 - 1.0 / self.zoom);
+                let zoom_delta = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 50.0, // Normalize pixel delta
+                };
+
+                if zoom_delta > 0.0 {
+                    self.time_window /= 1.2; // Zoom in (show less time)
+                } else if zoom_delta < 0.0 {
+                    self.time_window *= 1.2; // Zoom out (show more time)
+                }
+                self.time_window = self.time_window.clamp(0.1, 10.0); // 0.1 to 10 seconds
+            }
+            WindowEvent::DroppedFile(path) => {
+                if let Ok(media) = Media::try_from_path(path) {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.add_peaks(&media.peaks);
+                        self.media = Some(media);
                     }
-                    _ => {}
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -127,12 +153,21 @@ impl ApplicationHandler for App {
                                 }
                             }
                             PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                                self.scroll_offset -= 0.1 / self.zoom;
-                                self.scroll_offset = self.scroll_offset.max(0.0);
+                                // Seek backward by 1 second
+                                let current_time = media.position.load(std::sync::atomic::Ordering::Relaxed) as f32
+                                    / media.sample_rate.0 as f32
+                                    / media.channels as f32;
+                                media.seek((current_time - 1.0).max(0.0) as f64).ok();
                             }
                             PhysicalKey::Code(KeyCode::ArrowRight) => {
-                                self.scroll_offset += 0.1 / self.zoom;
-                                self.scroll_offset = self.scroll_offset.min(1.0 - 1.0 / self.zoom);
+                                // Seek forward by 1 second
+                                let current_time = media.position.load(std::sync::atomic::Ordering::Relaxed) as f32
+                                    / media.sample_rate.0 as f32
+                                    / media.channels as f32;
+                                let duration_secs = media.duration_samples as f32
+                                    / media.sample_rate.0 as f32
+                                    / media.channels as f32;
+                                media.seek((current_time + 1.0).min(duration_secs) as f64).ok();
                             }
                             _ => {}
                         }

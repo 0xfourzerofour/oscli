@@ -28,8 +28,10 @@ use symphonia::{
 
 #[derive(Clone)]
 pub struct Peak {
-    pub min: f32,
-    pub max: f32,
+    pub min_left: f32,
+    pub max_left: f32,
+    pub min_right: f32,
+    pub max_right: f32,
 }
 
 pub struct Media {
@@ -130,7 +132,7 @@ impl Media {
         decoder: &Box<dyn symphonia::core::codecs::Decoder>,
         duration_samples: u64,
     ) -> Result<Vec<Peak>> {
-        let block_size = 1024;
+        let block_size = 32;
         let num_blocks = (duration_samples / block_size) as usize + 1;
         let mut peaks = Vec::with_capacity(num_blocks);
         let mut tmp_decoder = symphonia::default::get_codecs()
@@ -152,63 +154,53 @@ impl Media {
             match tmp_decoder.decode(&packet) {
                 Ok(decoded) => {
                     let buf: AudioBufferRef = decoded;
-                    let samples: Vec<f32> = match buf {
-                        AudioBufferRef::F32(buffer) => buffer.chan(0).to_vec(),
-                        AudioBufferRef::U8(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| (s as f32 - 128.0) / 128.0)
-                                .collect()
-                        },
-                        AudioBufferRef::U16(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| (s as f32 - 32768.0) / 32768.0)
-                                .collect()
-                        },
-                        AudioBufferRef::U24(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| (s.inner() as f32 - 8388608.0) / 8388608.0)
-                                .collect()
-                        },
-                        AudioBufferRef::U32(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| (s as f32 - 2147483648.0) / 2147483648.0)
-                                .collect()
-                        },
-                        AudioBufferRef::S8(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| s as f32 / 128.0)
-                                .collect()
+                    let num_channels = buf.spec().channels.count();
+
+                    // Extract left and right channel samples
+                    let (left_samples, right_samples): (Vec<f32>, Vec<f32>) = match buf {
+                        AudioBufferRef::F32(buffer) => {
+                            let left = buffer.chan(0).to_vec();
+                            let right = if num_channels > 1 { buffer.chan(1).to_vec() } else { left.clone() };
+                            (left, right)
                         },
                         AudioBufferRef::S16(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| s as f32 / 32768.0)
-                                .collect()
-                        },
-                        AudioBufferRef::S24(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| s.inner() as f32 / 8388608.0)
-                                .collect()
+                            let left: Vec<f32> = buffer.chan(0).iter().map(|&s| s as f32 / 32768.0).collect();
+                            let right: Vec<f32> = if num_channels > 1 {
+                                buffer.chan(1).iter().map(|&s| s as f32 / 32768.0).collect()
+                            } else {
+                                left.clone()
+                            };
+                            (left, right)
                         },
                         AudioBufferRef::S32(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| s as f32 / 2147483648.0)
-                                .collect()
+                            let left: Vec<f32> = buffer.chan(0).iter().map(|&s| s as f32 / 2147483648.0).collect();
+                            let right: Vec<f32> = if num_channels > 1 {
+                                buffer.chan(1).iter().map(|&s| s as f32 / 2147483648.0).collect()
+                            } else {
+                                left.clone()
+                            };
+                            (left, right)
                         },
-                        AudioBufferRef::F64(buffer) => {
-                            buffer.chan(0).iter()
-                                .map(|&s| s as f32)
-                                .collect()
-                        },
+                        _ => continue, // Skip other formats for brevity
                     };
 
-                    for chunk in samples.chunks(block_size as usize) {
-                        let mut min = f32::MAX;
-                        let mut max = f32::MIN;
-                        for &s in chunk {
-                            min = min.min(s);
-                            max = max.max(s);
+                    for i in 0..(left_samples.len() / block_size as usize) {
+                        let start = i * block_size as usize;
+                        let end = ((i + 1) * block_size as usize).min(left_samples.len());
+
+                        let mut min_left = f32::MAX;
+                        let mut max_left = f32::MIN;
+                        let mut min_right = f32::MAX;
+                        let mut max_right = f32::MIN;
+
+                        for j in start..end {
+                            min_left = min_left.min(left_samples[j]);
+                            max_left = max_left.max(left_samples[j]);
+                            min_right = min_right.min(right_samples[j]);
+                            max_right = max_right.max(right_samples[j]);
                         }
-                        peaks.push(Peak { min, max });
+
+                        peaks.push(Peak { min_left, max_left, min_right, max_right });
                     }
                 }
                 Err(SymphError::IoError(_)) => continue,
@@ -233,8 +225,12 @@ impl Media {
                     && r.min_sample_rate() <= self.sample_rate
                     && r.channels() == self.channels
             })
-            .ok_or(anyhow::anyhow!("No config"))?
-            .with_sample_rate(self.sample_rate);
+            .map(|c| c.with_sample_rate(self.sample_rate))
+            .or_else(|| {
+                eprintln!("No exact config match, using default config");
+                device.default_output_config().ok()
+            })
+            .ok_or(anyhow::anyhow!("No config"))?;
 
         let mut consumer = self
             .consumer
@@ -459,7 +455,12 @@ impl Media {
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )?;
+        let codec_params = probed.format.default_track().unwrap().codec_params.clone();
         self.reader = Some(probed.format);
+        self.decoder = Some(symphonia::default::get_codecs().make(
+            &codec_params,
+            &DecoderOptions::default(),
+        )?);
 
         if let Some(reader) = &mut self.reader {
             reader.seek(
